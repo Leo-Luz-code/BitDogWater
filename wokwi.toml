@@ -1,4 +1,0 @@
-[wokwi]
-version = 1
-firmware = 'build/BitDogWeather.hex'
-elf = 'build/BitDogWeather.elf'
