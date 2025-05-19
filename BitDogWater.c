@@ -22,6 +22,7 @@ typedef struct
     uint16_t nivel_agua;   // Simulado pelo eixo Y do joystick (0-100%)
     uint16_t volume_chuva; // Simulado pelo eixo X do joystick (0-100%)
     char status_message[20];
+    uint8_t alert_source; // 0 = nenhum, 1 = água, 2 = chuva, 3 = ambos
 } SensorData_t;
 
 // Structure for buzzer control
@@ -161,14 +162,29 @@ void vJoystickTask(void *pvParameters)
         adc_select_input(ADC_CHANNEL_1); // VRX
         sensorData.volume_chuva = (adc_read() * 100) / 4095;
 
-        // Determina o status com base nos limiares
-        if (sensorData.nivel_agua >= 70 || sensorData.volume_chuva >= 80)
+        // Determina o status e a fonte do alerta
+        bool agua_alerta = (sensorData.nivel_agua >= 70);
+        bool chuva_alerta = (sensorData.volume_chuva >= 80);
+
+        if (agua_alerta && chuva_alerta)
         {
-            strcpy(sensorData.status_message, "ALERTA!");
+            strcpy(sensorData.status_message, "ALERTA CRITICO");
+            sensorData.alert_source = 3; // Ambos
+        }
+        else if (agua_alerta)
+        {
+            strcpy(sensorData.status_message, "ALERTA AGUA");
+            sensorData.alert_source = 1; // Água
+        }
+        else if (chuva_alerta)
+        {
+            strcpy(sensorData.status_message, "ALERTA CHUVA");
+            sensorData.alert_source = 2; // Chuva
         }
         else
         {
             strcpy(sensorData.status_message, "NORMAL");
+            sensorData.alert_source = 0; // Nenhum
         }
 
         // Envia dados para as outras tarefas
@@ -178,7 +194,6 @@ void vJoystickTask(void *pvParameters)
         vTaskDelay(pdMS_TO_TICKS(10)); // Atualiza a cada 10ms
     }
 }
-
 // LED Matrix task
 void vMatrixLEDTask(void *pvParameters)
 {
@@ -252,20 +267,39 @@ void vRedLEDTask(void *pvParameters)
     {
         if (xQueueReceive(xSensorQueue, &sensorData, portMAX_DELAY) == pdTRUE)
         {
-            if (strcmp(sensorData.status_message, "ALERTA!") == 0)
-            {
-                red_state = true; // Modo alerta - LED vermelho ligado
+            if (sensorData.alert_source > 0)
+            {                     // Se há algum alerta
+                red_state = true; // Liga LED vermelho
 
-                // Envia sinal para ativar o buzzer
-                BuzzerControl_t buzzerControl = {true, 500};
+                BuzzerControl_t buzzerControl;
+                buzzerControl.active = true;
+
+                // Define intervalo baseado na fonte do alerta
+                if (sensorData.alert_source == 1)
+                {                                 // Água
+                    buzzerControl.interval = 300; // 300ms para alerta de água
+                }
+                else if (sensorData.alert_source == 2)
+                {                                 // Chuva
+                    buzzerControl.interval = 500; // 500ms para alerta de chuva
+                }
+                else
+                {                                 // Ambos (crítico)
+                    buzzerControl.interval = 200; // 200ms mais rápido para alerta crítico
+                }
+
                 xQueueSend(xBuzzerQueue, &buzzerControl, 0);
             }
             else
             {
-                red_state = false; // Modo normal - LED vermelho desligado
+                red_state = false; // Desliga LED vermelho
+
+                // Desativa o buzzer
+                BuzzerControl_t buzzerControl = {false, 0};
+                xQueueSend(xBuzzerQueue, &buzzerControl, 0);
             }
 
-            // Atualiza LED Vermelho (PWM_CHAN_B)
+            // Atualiza LED Vermelho
             pwm_set_chan_level(slice_led_r, PWM_CHAN_B, red_state ? LED_ON : LED_OFF);
         }
 
@@ -332,15 +366,6 @@ void vDisplayTask(void *pvParameters)
             // Desenha strings
             ssd1306_draw_string(&ssd, str_agua, center_agua, center_y - 8);
             ssd1306_draw_string(&ssd, str_chuva, center_chuva, center_y + 2);
-
-            // Destaque para status de alerta
-            if (strcmp(sensorData.status_message, "ALERTA!") == 0)
-            {
-                // Desenha retângulo de fundo para destacar
-                ssd1306_rect(&ssd, center_status - 2, center_y + 14 - 2,
-                             strlen(sensorData.status_message) * 8 + 4, 10,
-                             !COLOR, COLOR, 1);
-            }
 
             ssd1306_draw_string(&ssd, sensorData.status_message, center_status, center_y + 14);
 
